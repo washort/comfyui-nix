@@ -18,9 +18,13 @@ let
   # CUDA runtime libraries are supplied by nixpkgs, so no separate toolkit is needed at runtime
   cudaWheels = versions.pytorchWheels.cu130;
 
-  # Pre-built PyTorch ROCm wheels from pytorch.org
-  # These avoid compiling PyTorch from source (which requires 30-60GB RAM and hours of build time)
-  rocmWheels = versions.pytorchWheels.rocm71;
+  # ROCm torch/torchvision/torchaudio come from nixpkgs' source-built
+  # derivations instead of pytorch.org wheels: the flake builds the ROCm
+  # variant against an nixpkgs instance with `rocmSupport = true` (pkgsRocm,
+  # python314), so they compile against rocmPackages. Pre-built ROCm wheels
+  # bundle their own ROCm 7.1 HSA runtime, which segfaults at first kernel
+  # freeze on newer AMD APUs (gfx1151 / Strix Halo). Nothing overrides torch
+  # here for `gpuSupport = "rocm"` — it falls through to nixpkgs.
 
   # Pre-built PyTorch XPU wheels from pytorch.org (Intel oneAPI / SYCL)
   # Unlike CUDA/ROCm, the XPU torch wheel does NOT bundle its SYCL / MKL /
@@ -105,16 +109,6 @@ let
     ]
   );
 
-  # ROCm libraries needed by PyTorch wheels (for auto-patchelf)
-  # The wheels bundle ROCm libraries internally; only compression libs are needed externally
-  rocmLibs = pkgs.lib.optionals useRocm (
-    with pkgs;
-    [
-      xz # liblzma.so.5
-      zstd # libzstd.so.1
-      bzip2 # libbz2.so.1
-    ]
-  );
 in
 final: prev:
 # CUDA torch from pre-built wheels - avoids 30-60GB RAM compilation
@@ -381,184 +375,12 @@ lib.optionalAttrs useCuda {
     };
   };
 }
-# ROCm torch from pre-built wheels - avoids 30-60GB RAM compilation
-# The wheels bundle ROCm libraries internally, providing full GPU support
-// lib.optionalAttrs useRocm {
-  torch = final.buildPythonPackage {
-    pname = "torch";
-    version = rocmWheels.torch.version;
-    format = "wheel";
-    src = pkgs.fetchurl {
-      url = rocmWheels.torch.url;
-      hash = rocmWheels.torch.hash;
-    };
-    dontBuild = true;
-    dontConfigure = true;
-    nativeBuildInputs = [
-      pkgs.autoPatchelfHook
-      pkgs.gnused
-    ];
-    buildInputs = wheelBuildInputs ++ rocmLibs;
-
-    # The ROCm wheel names triton-rocm, which is provided by the bundled ROCm
-    # runtime rather than a PyPI package. The runtime dependency hook cannot
-    # recognize that provider, so validate the rewritten installed metadata in
-    # the rocm-torch-runtime-deps check instead.
-    dontCheckRuntimeDeps = true;
-    # These are provided by nixpkgs rocmPackages, not PyPI packages
-    postInstall = ''
-      for metadata in "$out/${final.python.sitePackages}"/torch-*.dist-info/METADATA; do
-        if [[ -f "$metadata" ]]; then
-          sed -i '/^Requires-Dist: triton-rocm/d' "$metadata"
-        fi
-      done
-    '';
-
-    propagatedBuildInputs = with final; [
-      filelock
-      typing-extensions
-      sympy
-      networkx
-      jinja2
-      fsspec
-      setuptools
-    ];
-    # Don't check for ROCm at import time (requires GPU)
-    pythonImportsCheck = [ ];
-    doCheck = false;
-
-    # Passthru attributes expected by downstream packages (xformers, bitsandbytes, etc.)
-    # The wheel bundles ROCm 7.1 and supports all GPU architectures
-    passthru = {
-      cudaSupport = false;
-      rocmSupport = true;
-      # Provide rocmPackages for packages that need it (use default version)
-      cudaPackages = { };
-      rocmPackages = pkgs.rocmPackages;
-    };
-
-    meta = {
-      description = "PyTorch with ROCm ${rocmWheels.torch.version} (pre-built wheel)";
-      homepage = "https://pytorch.org";
-      license = lib.licenses.bsd3;
-      platforms = [ "x86_64-linux" ];
-    };
-  };
-
-  torchvision = final.buildPythonPackage {
-    pname = "torchvision";
-    version = rocmWheels.torchvision.version;
-    format = "wheel";
-    src = pkgs.fetchurl {
-      url = rocmWheels.torchvision.url;
-      hash = rocmWheels.torchvision.hash;
-    };
-    dontBuild = true;
-    dontConfigure = true;
-    nativeBuildInputs = [ pkgs.autoPatchelfHook ];
-    buildInputs = wheelBuildInputs ++ rocmLibs ++ [ final.torch ];
-
-    # Torch libs live in a non-standard path (site-packages/torch/lib/) so
-    # autoPatchelf can't find them. We ignore them during patching and add
-    # the RPATH manually in postFixup so _C.so can find libc10.so at runtime.
-    autoPatchelfIgnoreMissingDeps = [
-      "libc10.so"
-      "libc10_hip.so"
-      "libamdhip64.so.7"
-      "libtorch.so"
-      "libtorch_cpu.so"
-      "libtorch_hip.so"
-      "libtorch_python.so"
-      "libhipblas.so.3"
-      "libhipfft.so.0"
-      "libhipsolver.so.1"
-      "libhipsparse.so.4"
-      "libMIOpen.so.1"
-      "librocrand.so.1"
-    ];
-    postFixup = ''
-      local torchLib="${final.torch}/${final.torch.pythonModule.sitePackages}/torch/lib"
-      for so in $out/${final.torch.pythonModule.sitePackages}/torchvision/*.so; do
-        ${pkgs.patchelf}/bin/patchelf --add-rpath "$torchLib" "$so"
-      done
-    '';
-    propagatedBuildInputs = with final; [
-      torch
-      numpy
-      pillow
-    ];
-    pythonImportsCheck = [ "torchvision" ];
-    doCheck = false;
-    meta = {
-      description = "TorchVision with ROCm (pre-built wheel)";
-      homepage = "https://pytorch.org/vision";
-      license = lib.licenses.bsd3;
-      platforms = [ "x86_64-linux" ];
-    };
-  };
-
-  torchaudio = final.buildPythonPackage {
-    pname = "torchaudio";
-    version = rocmWheels.torchaudio.version;
-    format = "wheel";
-    src = pkgs.fetchurl {
-      url = rocmWheels.torchaudio.url;
-      hash = rocmWheels.torchaudio.hash;
-    };
-    dontBuild = true;
-    dontConfigure = true;
-    nativeBuildInputs = [ pkgs.autoPatchelfHook ];
-    buildInputs = wheelBuildInputs ++ rocmLibs ++ [ final.torch ];
-    # Ignore torch libs (loaded via Python) and FFmpeg/sox libs (optional, multiple versions bundled)
-    autoPatchelfIgnoreMissingDeps = [
-      # Torch libs (loaded via Python import)
-      "libc10.so"
-      "libc10_hip.so"
-      "libamdhip64.so.7"
-      "libtorch.so"
-      "libtorch_cpu.so"
-      "libtorch_hip.so"
-      "libtorch_python.so"
-      "libhipblas.so.3"
-      "libhipfft.so.0"
-      "libhipsolver.so.1"
-      "libhipsparse.so.4"
-      "libMIOpen.so.1"
-      "librocrand.so.1"
-      # Sox (optional audio backend)
-      "libsox.so"
-      # FFmpeg 4.x
-      "libavutil.so.56"
-      "libavcodec.so.58"
-      "libavformat.so.58"
-      "libavfilter.so.7"
-      "libavdevice.so.58"
-      # FFmpeg 5.x
-      "libavutil.so.57"
-      "libavcodec.so.59"
-      "libavformat.so.59"
-      "libavfilter.so.8"
-      "libavdevice.so.59"
-      # FFmpeg 6.x
-      "libavutil.so.58"
-      "libavcodec.so.60"
-      "libavformat.so.60"
-      "libavfilter.so.9"
-      "libavdevice.so.60"
-    ];
-    propagatedBuildInputs = with final; [
-      torch
-    ];
-    pythonImportsCheck = [ ];
-    doCheck = false;
-    meta = {
-      description = "TorchAudio with ROCm (pre-built wheel)";
-      homepage = "https://pytorch.org/audio";
-      license = lib.licenses.bsd2;
-      platforms = [ "x86_64-linux" ];
-    };
-  };
-}
+# ROCm torch comes from nixpkgs' source-built derivations. torch/torchvision/
+# torchaudio fall through to nixpkgs (pythonBase = python314 on the pkgsRocm
+# nixpkgs instance, which has `rocmSupport = true`), so they compile against
+# rocmPackages instead of pytorch.org wheels whose bundled ROCm 7.1 HSA runtime
+# segfaults at first kernel freeze on newer AMD APUs (gfx1151 / Strix Halo).
+// lib.optionalAttrs useRocm { }
 # Intel XPU torch + runtime wheels
 # The XPU torch wheel only contains torch-proper binaries (~240 MB). Its Intel
 # runtime dependencies (SYCL, MKL, oneCCL, Intel compiler RT, TBB, PTI, triton)

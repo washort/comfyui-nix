@@ -15,7 +15,11 @@
   };
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # Pinned to the nixpkgs rev whose source-built ROCm torch (2.11.0 /
+    # ROCm 7.2.3) is already realized on this host, so the ROCm variant
+    # reuses it instead of recompiling torch. Easy to bump when a newer
+    # working ROCm torch lands in cache.
+    nixpkgs.url = "github:NixOS/nixpkgs/a0374025a863d007d98e3297f6aa46cc3141c2f0";
     flake-parts.url = "github:hercules-ci/flake-parts";
   };
 
@@ -90,13 +94,36 @@
               allowBrokenPredicate = pkg: (pkg.pname or "") == "open-clip-torch";
             };
           };
+          # ROCm builds use nixpkgs' source-built torch (compiled against
+          # rocmPackages) instead of pytorch.org ROCm wheels, whose bundled
+          # ROCm 7.1 HSA runtime segfaults at first kernel freeze on newer
+          # AMD APUs (gfx1151 / Strix Halo). `rocmSupport` here is what makes
+          # python314Packages.torch/torchvision/torchaudio build for ROCm.
+          pkgsRocm = import nixpkgs {
+            system = "x86_64-linux";
+            config = {
+              allowUnfree = true;
+              allowBrokenPredicate = pkg: (pkg.pname or "") == "open-clip-torch";
+              rocmSupport = true;
+            };
+          };
 
           pythonOverridesFor =
             pkgs: gpuSupport: import ./nix/python-overrides.nix { inherit pkgs versions gpuSupport; };
 
+          # Python interpreter selection: ROCm runs on python3.14 so it reuses
+          # the source-built torch/torchvision/torchaudio already realized for
+          # that interpreter; CUDA/XPU/CPU stay on python3.12 (their torch
+          # wheels are cp312 and non-abi3).
+          pythonBaseFor =
+            pkgs: gpuSupport:
+            if gpuSupport == "rocm" then pkgs.python314 else pkgs.python312;
+
           mkPython =
             pkgs: gpuSupport:
-            pkgs.python312.override { packageOverrides = pythonOverridesFor pkgs gpuSupport; };
+            (pythonBaseFor pkgs gpuSupport).override {
+              packageOverrides = pythonOverridesFor pkgs gpuSupport;
+            };
 
           mkPythonEnv =
             pkgs:
@@ -122,13 +149,14 @@
                 ;
               lib = pkgs.lib;
               pythonOverrides = pythonOverridesFor pkgs gpuSupport;
+              pythonBase = pythonBaseFor pkgs gpuSupport;
             };
 
           # Linux packages for Docker image cross-builds
           linuxX86Packages = mkComfyPackages pkgsLinuxX86 { };
           # Docker CUDA images use pre-built wheels (all architectures supported)
           linuxX86PackagesCuda = mkComfyPackages pkgsLinuxX86 { gpuSupport = "cuda"; };
-          linuxX86PackagesRocm = mkComfyPackages pkgsLinuxX86 { gpuSupport = "rocm"; };
+          linuxX86PackagesRocm = mkComfyPackages pkgsRocm { gpuSupport = "rocm"; };
           # Intel XPU (oneAPI / SYCL) — Linux x86_64 only
           linuxX86PackagesXpu = mkComfyPackages pkgsLinuxX86 { gpuSupport = "xpu"; };
           linuxArm64Packages = mkComfyPackages pkgsLinuxArm64 { };
@@ -136,7 +164,7 @@
           nativePackages = mkComfyPackages pkgs { };
           # CUDA uses pre-built wheels for all supported GPU architectures
           nativePackagesCuda = mkComfyPackages pkgs { gpuSupport = "cuda"; };
-          nativePackagesRocm = mkComfyPackages pkgs { gpuSupport = "rocm"; };
+          nativePackagesRocm = mkComfyPackages pkgsRocm { gpuSupport = "rocm"; };
           nativePackagesXpu = mkComfyPackages pkgs { gpuSupport = "xpu"; };
 
           pythonEnv = mkPythonEnv pkgs;
@@ -276,7 +304,11 @@
             # A function, not a fixed package set: the torch checks need the
             # interpreter for a specific backend, and `pythonRuntime.pkgs` is
             # the *unoverridden* nixpkgs set, so it cannot be used for that.
-            pythonFor = mkPython pkgs;
+            # ROCm checks evaluate against the rocm-configured pkgsRocm so they
+            # test the source-built ROCm torch rather than the CPU one.
+            pythonFor =
+              gpuSupport:
+              mkPython (if gpuSupport == "rocm" then pkgsRocm else pkgs) gpuSupport;
             vendoredPackages = nativePackages.vendoredPackages;
             nixosModule = self.nixosModules.default;
           };

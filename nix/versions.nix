@@ -229,24 +229,6 @@
         hash = "sha256-7Vc+cxm6mm4Te0iV7d9Mn81CS7ThCmKSZ9ZLVazFf7s=";
       };
     };
-    # Linux x86_64 ROCm 7.1
-    rocm71 = {
-      torch = {
-        version = "2.10.0";
-        url = "https://download.pytorch.org/whl/rocm7.1/torch-2.10.0%2Brocm7.1-cp312-cp312-manylinux_2_28_x86_64.whl";
-        hash = "sha256-AI7g13u4tfn07h8AISAZxGGRcePEGV3lbyUzMbO8Mg0=";
-      };
-      torchvision = {
-        version = "0.25.0";
-        url = "https://download.pytorch.org/whl/rocm7.1/torchvision-0.25.0%2Brocm7.1-cp312-cp312-manylinux_2_28_x86_64.whl";
-        hash = "sha256-iuo929t0gB0zdFd6ELPwTUmJfCet0jXLJTE99uZbGSk=";
-      };
-      torchaudio = {
-        version = "2.10.0";
-        url = "https://download.pytorch.org/whl/rocm7.1/torchaudio-2.10.0%2Brocm7.1-cp312-cp312-manylinux_2_28_x86_64.whl";
-        hash = "sha256-pUuMH2HeAbGrlGWJqgFYId0RCTVEcCJJ0gq6VpE8aLs=";
-      };
-    };
     # Linux x86_64 Intel XPU (oneAPI / SYCL)
     # In-tree PyTorch XPU — no IPEX needed. Targets Arc A/B series and
     # Core Ultra (Meteor Lake+) iGPUs. Older Xe-LP iGPUs (UHD 770) are

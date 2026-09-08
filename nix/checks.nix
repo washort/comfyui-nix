@@ -222,7 +222,6 @@ let
   # Guards against the check silently falling back to nixpkgs' CPU torch again.
   expectedTorchVersions = {
     cuda = "+cu";
-    rocm = "+rocm";
     xpu = "+xpu";
   };
   torchRuntimeDepsChecks =
@@ -234,12 +233,6 @@ let
           "nvidia-"
           "triton"
         ];
-      };
-    }
-    // pkgs.lib.optionalAttrs (packages ? rocm) {
-      rocm-torch-runtime-deps = mkTorchRuntimeDeps {
-        backend = "rocm";
-        removedRequirements = [ "triton-rocm" ];
       };
     }
     // pkgs.lib.optionalAttrs (packages ? xpu) {
@@ -331,6 +324,22 @@ in
     name = "extra-python-packages-rocm";
     package = packages.rocm;
   };
+  # ROCm torch is nixpkgs' source-built build (see python-overrides.nix): assert
+  # it is genuinely the ROCm variant (torch.version.hip set) so the check cannot
+  # silently pass against the CPU torch. No GPU required — this only verifies the
+  # build flavour.
+  rocm-torch-hip =
+    let
+      torchPython = (pythonFor "rocm").withPackages (ps: [ ps.torch ]);
+    in
+    pkgs.runCommand "rocm-torch-hip" { nativeBuildInputs = [ torchPython ]; } ''
+      ${torchPython}/bin/python - <<'PY'
+      import torch
+      assert torch.__version__
+      assert torch.version.hip, "expected ROCm (HIP) torch, got CPU build"
+      PY
+      touch $out
+    '';
 }
 // pkgs.lib.optionalAttrs (packages ? xpu) {
   extra-python-packages-xpu = mkExtraPythonPackagesCheck {

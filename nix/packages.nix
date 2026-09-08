@@ -5,6 +5,7 @@
   pythonOverrides,
   gpuSupport ? "none", # "none", "cuda", "rocm", "xpu"
   extraPythonPackages ? (_: [ ]),
+  pythonBase ? pkgs.python312, # interpreters: rocm uses python314 (source-built torch)
 }:
 let
   useCuda = gpuSupport == "cuda" && pkgs.stdenv.isLinux;
@@ -80,7 +81,10 @@ let
     ];
   };
 
-  python = pkgs.python312.override { packageOverrides = pythonOverrides; };
+  python = pythonBase.override { packageOverrides = pythonOverrides; };
+
+  # Version segment for venv site-packages dirs and bin symlinks.
+  pythonMajorMinor = lib.concatStringsSep "." (lib.take 2 (lib.splitString "." python.version));
 
   vendored = import ./vendored-packages.nix { inherit pkgs python versions; };
 
@@ -649,7 +653,7 @@ let
             # This allows both pip and uv to install packages to a writable location
             # while keeping the Nix store read-only
             VENV_DIR="$BASE_DIR/.venv"
-            SITE_PACKAGES="$VENV_DIR/lib/python3.12/site-packages"
+            SITE_PACKAGES="$VENV_DIR/lib/python${pythonMajorMinor}/site-packages"
             mkdir -p "$SITE_PACKAGES"
             mkdir -p "$VENV_DIR/bin"
 
@@ -658,7 +662,7 @@ let
               cat > "$VENV_DIR/pyvenv.cfg" << PYVENV
       home = ${pythonRuntime}/bin
       include-system-site-packages = true
-      version = 3.12.9
+      version = ${python.version}
       PYVENV
             fi
 
@@ -666,7 +670,7 @@ let
             if [[ ! -e "$VENV_DIR/bin/python" ]]; then
               ln -sf "${pythonRuntime}/bin/python" "$VENV_DIR/bin/python"
               ln -sf "${pythonRuntime}/bin/python3" "$VENV_DIR/bin/python3"
-              ln -sf "${pythonRuntime}/bin/python3.12" "$VENV_DIR/bin/python3.12"
+              ln -sf "${pythonRuntime}/bin/python${pythonMajorMinor}" "$VENV_DIR/bin/python${pythonMajorMinor}"
             fi
 
             # Set VIRTUAL_ENV so uv installs to our mutable venv instead of Nix store
