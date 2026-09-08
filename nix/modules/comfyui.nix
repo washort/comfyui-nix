@@ -45,7 +45,7 @@ let
   env =
     lib.optionalAttrs (!cfg.bundledCustomNodes) { COMFY_SKIP_BUNDLED_NODES = "1"; } // cfg.environment;
   escapedArgs = lib.concatStringsSep " " (map lib.escapeShellArg args);
-  execStart = "${effectivePackage}/bin/comfy-ui ${escapedArgs}";
+  execStart = "${effectivePackage}/bin/comfyui ${escapedArgs}";
 
   # User/group creation: only create if createUser is true AND the user doesn't
   # already exist in the system (i.e., not a pre-existing user like "nobody")
